@@ -49,6 +49,7 @@ Copy `.env.example` to `.env` and edit. Every setting has a working default exce
 | `SAFEYE_REALERT_HOURS` | `0` | Remind every N hours during an outage. `0` = alert once, then stay quiet. |
 | `SAFEYE_TLS_WARN_DAYS` | `14` | Warn when a certificate expires within N days. `0` disables. |
 | `SAFEYE_HEARTBEAT_URL` | — | Pinged after every cycle. See [Watching the watcher](#watching-the-watcher). |
+| `SAFEYE_USER_AGENT` | `Safeye/1.0 (+...)` | The default User-Agent sent with requests. |
 | `SAFEYE_MAX_WORKERS` | `10` | Endpoints checked in parallel. |
 
 ### Endpoints

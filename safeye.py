@@ -27,6 +27,7 @@ from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
 
 import requests
+from requests.structures import CaseInsensitiveDict
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -54,6 +55,10 @@ def _env_bool(name, default):
 
 
 # --- Configuration -----------------------------------------------------------
+
+VERSION = "1.0"
+DEFAULT_USER_AGENT = f"Safeye/{VERSION} (+https://github.com/rcpassos/safeye-script)"
+USER_AGENT = os.getenv("SAFEYE_USER_AGENT", DEFAULT_USER_AGENT)
 
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.example.com")
 SMTP_PORT = _env_int("SMTP_PORT", 587)
@@ -315,10 +320,14 @@ def perform_check(config):
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         started = time.monotonic()
         try:
+            request_headers = CaseInsensitiveDict()
+            request_headers["User-Agent"] = USER_AGENT
+            request_headers.update(config["headers"])
+
             response = requests.request(
                 method=config["http_method"],
                 url=config["endpoint"],
-                headers=config["headers"],
+                headers=request_headers,
                 json=config["body"],
                 timeout=REQUEST_TIMEOUT,
                 verify=VERIFY_TLS,
@@ -611,7 +620,11 @@ def send_heartbeat():
     if not HEARTBEAT_URL:
         return
     try:
-        requests.get(HEARTBEAT_URL, timeout=REQUEST_TIMEOUT)
+        requests.get(
+            HEARTBEAT_URL,
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT,
+        )
     except Exception as exc:
         print(f"Heartbeat ping failed: {exc}")
 

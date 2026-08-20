@@ -245,6 +245,50 @@ class TestPerformCheck(BaseTest):
         self.assertEqual(result.attempts, 2)
         self.assertIn("TimeoutError: timed out", result.error)
 
+    def test_default_user_agent_is_sent(self):
+        with patch("safeye.requests.request", return_value=self.response(200)) as request:
+            perform_check(make_config())
+        
+        request.assert_called_once()
+        headers = request.call_args.kwargs["headers"]
+        self.assertEqual(headers["User-Agent"], safeye.USER_AGENT)
+
+    def test_row_level_user_agent_overrides_default(self):
+        config = make_config(headers={"User-Agent": "CustomAgent/1.0"})
+        with patch("safeye.requests.request", return_value=self.response(200)) as request:
+            perform_check(config)
+        
+        request.assert_called_once()
+        headers = request.call_args.kwargs["headers"]
+        self.assertEqual(headers["User-Agent"], "CustomAgent/1.0")
+
+    def test_lowercase_user_agent_in_row_also_overrides(self):
+        config = make_config(headers={"user-agent": "CustomAgent/Lowercase"})
+        with patch("safeye.requests.request", return_value=self.response(200)) as request:
+            perform_check(config)
+        
+        request.assert_called_once()
+        headers = request.call_args.kwargs["headers"]
+        self.assertEqual(headers["User-Agent"], "CustomAgent/Lowercase")
+        self.assertEqual(len(headers), 1)
+
+    def test_config_headers_is_not_mutated_by_check(self):
+        config = make_config(headers={"Authorization": "Bearer token"})
+        original_headers = dict(config["headers"])
+        with patch("safeye.requests.request", return_value=self.response(200)):
+            perform_check(config)
+        
+        self.assertEqual(config["headers"], original_headers)
+
+    def test_safeye_user_agent_env_var_overrides_default(self):
+        self.set_module(USER_AGENT="EnvOverride/1.0")
+        with patch("safeye.requests.request", return_value=self.response(200)) as request:
+            perform_check(make_config())
+        
+        request.assert_called_once()
+        headers = request.call_args.kwargs["headers"]
+        self.assertEqual(headers["User-Agent"], "EnvOverride/1.0")
+
 
 class TestAlertStateMachine(BaseTest):
     """The alert path is the reason the tool exists; cover every transition."""
@@ -737,6 +781,7 @@ class TestExecuteRequests(BaseTest):
 
         get.assert_called_once()
         self.assertEqual(get.call_args[0][0], "https://hc.example.com/ping")
+        self.assertEqual(get.call_args.kwargs["headers"]["User-Agent"], safeye.USER_AGENT)
 
     def test_heartbeat_failure_does_not_break_the_cycle(self):
         self.set_module(HEARTBEAT_URL="https://hc.example.com/ping")

@@ -1,0 +1,4 @@
+client;project_name;endpoint;expected_http_status;notify_emails;body_json;headers_json;http_method;max_response_ms
+Acme Corp;Website Uptime;https://example.com/health;200;admin@example.com;;;GET;2000
+Beta Inc;API Status;https://api.example.com/v1/status;200,204;support@example.com;;{"Authorization": "Bearer YOUR_TOKEN"};GET;
+Gamma LLC;Login Flow;https://example.com/api/login;200;dev@example.com;{"username": "testuser", "password": "testpass"};{"Content-Type": "application/json"};POST;

@@ -1,303 +1,155 @@
-# Safeye - HTTP Endpoint Monitor
+# Safeye — HTTP endpoint monitoring in one file
 
-A Python script to periodically check HTTP endpoints based on configurations defined in a CSV file. The script logs the results per project, sends email notifications on errors, and includes features like log rotation and unit testing. Ideal for monitoring APIs, websites, and services to ensure they are up and running as expected.
+Safeye checks a list of HTTP endpoints on a schedule and emails you **when something changes** — not every time it looks. No database, no container, no dashboard: one Python file and a spreadsheet.
 
-## Table of Contents
+```bash
+pip install -r requirements.txt
+cp .env.example .env && cp requests.example.csv requests.csv
+python safeye.py --once --dry-run
+```
 
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Configuration](#configuration)
-  - [SMTP Settings](#smtp-settings)
-  - [CSV Configuration File](#csv-configuration-file)
-- [Usage](#usage)
-- [Logging and Monitoring](#logging-and-monitoring)
-- [Log Rotation](#log-rotation)
-- [Unit Tests](#unit-tests)
-- [Contributing](#contributing)
-- [License](#license)
+## Is this the right tool for you?
 
-## Features
+**Use Safeye if** you look after a handful of sites or APIs, you want the config to be a spreadsheet a non-developer can edit, and you'd rather drop a file on a box you already have than run another service.
 
-- Reads configurations from a CSV file to perform HTTP requests.
-- Supports various HTTP methods (`GET`, `POST`, `PUT`, `DELETE`).
-- Allows setting custom headers and body for requests.
-- Checks if the response status code matches the expected status.
-- Logs the results per project in individual log files.
-- Sends email notifications to specified recipients on errors or unexpected status codes.
-- Rotates logs by deleting logs older than 30 days.
-- Provides unit tests with full coverage using the `unittest` framework.
+**Use something else if** you want dashboards, status pages, historical graphs, or 20 notification integrations. [Uptime Kuma](https://github.com/louislam/uptime-kuma) and [Gatus](https://github.com/TwiN/gatus) are excellent and Safeye is not trying to compete with them. Safeye's only real advantage is that it's ~600 lines you can read in a sitting.
 
-## Requirements
+## What it does
 
-- Python 3.6 or higher
-- Packages:
-  - `requests`
-  - `unittest` (comes with Python standard library)
-  - `python-dotenv`
+- Checks endpoints **concurrently** with any HTTP method, custom headers, and JSON bodies.
+- **Retries** transient failures with exponential backoff before declaring anything down.
+- **Alerts only on state changes**: one email when an endpoint goes down, one when it recovers, silence in between. Optional reminders while an outage continues.
+- Remembers state in `state.json`, so a restart doesn't re-alert you about a known outage.
+- Fails a check on a **slow response**, not just a bad status code.
+- Warns before an **HTTPS certificate expires**, and when one already has — including while the endpoint itself is failing.
+- Pings a **dead man's switch** each cycle, so a Safeye that has crashed doesn't look like healthy endpoints.
+- Writes a rotating log per project plus a one-line summary per cycle.
 
-## Installation
+## Install
 
-1. **Clone the Repository:**
+```bash
+git clone https://github.com/rcpassos/safeye-script.git
+cd safeye-script
+pip install -r requirements.txt
+```
 
-   ```bash
-   git clone https://github.com/rcpassos/safeye-script.git
-   cd safeye-script
-   ```
-
-2. **Install Dependencies:**
-
-   Install the required Python packages using `pip`:
-
-   ```bash
-   pip install requests
-   ```
-
-   ```bash
-   pip install python-dotenv
-   ```
+Python 3.10 or newer.
 
 ## Configuration
 
-### SMTP Settings
+### Settings
 
-The script requires SMTP settings to send email notifications. You can set these configurations either by setting environment variables or by modifying the script directly.
+Copy `.env.example` to `.env` and edit. Every setting has a working default except SMTP; see the file for the full annotated list. The ones that matter most:
 
-**Environment Variables:**
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | — | Where alerts are sent from. `SMTP_USER` empty means no login. |
+| `SAFEYE_INTERVAL` | `300` | Seconds between cycles. |
+| `SAFEYE_RETRY_ATTEMPTS` | `3` | Total attempts before declaring an endpoint down. |
+| `SAFEYE_REALERT_HOURS` | `0` | Remind every N hours during an outage. `0` = alert once, then stay quiet. |
+| `SAFEYE_TLS_WARN_DAYS` | `14` | Warn when a certificate expires within N days. `0` disables. |
+| `SAFEYE_HEARTBEAT_URL` | — | Pinged after every cycle. See [Watching the watcher](#watching-the-watcher). |
+| `SAFEYE_MAX_WORKERS` | `10` | Endpoints checked in parallel. |
 
-Copy the .env.example file to the .env file and replace the dummy values.
+### Endpoints
 
-```bash
-cp .env.example .env
-```
+Copy `requests.example.csv` to `requests.csv`. It is semicolon-separated, UTF-8, and **gitignored** — it will usually hold API tokens, so keep it out of version control.
 
-**Directly in the Script:**
-
-Open `safeye.py` and modify the SMTP configuration section:
-
-```python
-# Configuration
-SMTP_HOST = os.getenv('SMTP_HOST', 'your_smtp_host')
-SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
-SMTP_USER = os.getenv('SMTP_USER', 'your_email@example.com')
-SMTP_PASS = os.getenv('SMTP_PASS', 'your_email_password')
-SMTP_FROM = os.getenv('SMTP_FROM', 'your_email@example.com')
-```
-
-> **Security Note:** If you choose to store your SMTP credentials in the script, ensure that the script is not exposed publicly to avoid compromising your email account.
-
-### Other Configurations
-
-You can change the following directly in the `safeye.py` file.
-
-```python
-LOGS_DIR = "logs"
-RESUME_LOG_FILE = "resume.log"
-REQUESTS_CSV = "requests.csv"
-```
-
-CHECK_INTERVAL = 30 \* 60 # 30 minutes
-
-### CSV Configuration File
-
-The script reads configurations from a CSV file named `requests.csv`. This file should be placed in the same directory as the script.
-
-**CSV Format:**
-
-- The CSV file uses semicolons (`;`) as field separators.
-- Ensure the file is saved with UTF-8 encoding.
-
-**Columns:**
-
-- `client`: The name of the client or company.
-- `project_name`: A descriptive name for the project or check.
-- `endpoint`: The URL to which the HTTP request will be made.
-- `expected_http_status`: The expected HTTP status code (e.g., `200`).
-- `notify_emails`: Comma-separated list of email addresses to notify on errors.
-- `body_json`: JSON-formatted string for the request body (if applicable).
-- `headers_json`: JSON-formatted string for custom headers.
-- `http_method`: HTTP method to use (`GET`, `POST`, `PUT`, `DELETE`).
-
-**Example `requests.csv`:**
+| Column | Required | Description |
+| --- | --- | --- |
+| `client` | no | Grouping label, shown in alerts. |
+| `project_name` | no | Names the log file and the alert. Must be unique per client. |
+| `endpoint` | **yes** | URL to request. Rows without one are skipped. |
+| `expected_http_status` | no | `200`, or a list like `200,204`. Defaults to `200`. |
+| `notify_emails` | no | Comma-separated. Empty means log-only. |
+| `body_json` | no | JSON request body. |
+| `headers_json` | no | JSON headers, e.g. `{"Authorization": "Bearer …"}`. |
+| `http_method` | no | Defaults to `GET`. |
+| `max_response_ms` | no | Fail the check if the response is slower than this. |
 
 ```csv
-client;project_name;endpoint;expected_http_status;notify_emails;body_json;headers_json;http_method
-Acme Corp;Website Uptime Checker;https://example.com/health;200;admin@example.com;;;GET
-Beta Inc;API Status Monitor;https://api.example.com/v1/status;200;support@example.com;;{"Authorization": "Bearer YOUR_TOKEN"};GET
-Gamma LLC;User Login Test;https://example.com/api/login;200;dev@example.com;{"username": "testuser", "password": "testpass"};{"Content-Type": "application/json"};POST
+client;project_name;endpoint;expected_http_status;notify_emails;body_json;headers_json;http_method;max_response_ms
+Acme Corp;Website Uptime;https://example.com/health;200;admin@example.com;;;GET;2000
+Beta Inc;API Status;https://api.example.com/v1/status;200,204;support@example.com;;{"Authorization": "Bearer TOKEN"};GET;
 ```
 
-**Notes:**
-
-- For JSON fields (`body_json`, `headers_json`), ensure that the JSON strings are valid.
-- If a field is not applicable, leave it empty (e.g., `body_json` for a `GET` request).
+A malformed row degrades rather than crashes: bad JSON is logged and ignored, and the rest of the file still runs.
 
 ## Usage
 
-Run the script using Python:
-
 ```bash
-python safeye.py
+python safeye.py                 # run forever, one cycle per SAFEYE_INTERVAL
+python safeye.py --once          # single cycle, then exit — for cron or systemd timers
+python safeye.py --dry-run       # check everything, print alerts instead of emailing
+python safeye.py --config other.csv --interval 60
 ```
 
-The script will:
+`--dry-run` is the right way to validate a new config: it exercises every check and shows exactly which alerts would have gone out. It leaves no trace — `state.json` is not written and the heartbeat is not pinged — so a dry run can't swallow the next real alert.
 
-- Execute immediately upon running.
-- Schedule subsequent executions every 30 minutes.
+**As a cron job** (state persists between runs, so alerting still works correctly):
 
-## Logging and Monitoring
+```bash
+*/5 * * * * cd /opt/safeye && /usr/bin/python3 safeye.py --once >> cron.log 2>&1
+```
 
-- **Per-Project Logs:**
+## How alerting works
 
-  Logs are saved in the `logs` directory, with each project's logs in a separate file named after the `project_name`.
+Safeye keeps an up/down state per check in `state.json`:
 
-  ```
-  logs/
-  ├── project1.log
-  ├── project2.log
-  └── ...
-  ```
+| Previous | Now | Result |
+| --- | --- | --- |
+| up | up | silence |
+| up | down | **DOWN** email |
+| down | down | silence (or a **STILL DOWN** reminder if `SAFEYE_REALERT_HOURS` > 0) |
+| down | up | **RECOVERED** email, including how long it was down |
 
-- **Summary Log:**
+An endpoint is only "down" after `SAFEYE_RETRY_ATTEMPTS` consecutive failures *within a single cycle*, so a one-off blip doesn't page anyone. Deleting `state.json` resets everything to "up".
 
-  A summary of each execution is appended to `resume.log` in the script's directory.
+A transition is only recorded as announced once the email actually leaves. If your SMTP server is down when an endpoint goes down, Safeye retries the DOWN email every cycle until it gets through, rather than falling silent for the rest of the outage — and likewise for RECOVERED, which keeps reporting the downtime of the outage it belongs to.
 
-  **Example Entry:**
+### Watching the watcher
 
-  ```
-  2023-10-05T12:00:00.000000 | 5 analysed projects | 2 projects in alert
-  ```
+If Safeye dies, silence looks exactly like everything being fine. Set `SAFEYE_HEARTBEAT_URL` to a check-in URL from a dead man's switch service such as [healthchecks.io](https://healthchecks.io) (free tier is plenty). Safeye pings it after each cycle, and the service alerts you when the pings stop. Without this, Safeye can only tell you about failures it is still alive to notice.
 
-## Log Rotation
+## Logs
 
-The script includes a function to clean up old logs:
+```
+logs/
+├── Website_Uptime.log     # rotates at 1 MB, 5 backups kept
+└── API_Status.log
+resume.log                 # one line per cycle
+state.json                 # current up/down state
+```
 
-- Deletes log files in the `logs` directory that are older than 30 days.
-- This function runs each time the script executes.
+```
+2026-08-20T10:24:24 | 12 analysed projects | 1 projects in alert | down: API Status
+```
 
-If you prefer to use system tools like `logrotate` on Linux for log management, you can set up a configuration file accordingly.
+Rotation is handled by `RotatingFileHandler`, so disk usage is bounded without any cleanup job.
 
-## Unit Tests
+## Tests
 
-The project includes unit tests with full coverage, located in `test_safeye.py`.
+```bash
+python -m unittest test_safeye.py
+```
 
-### Running the Unit Tests
+59 tests, 97% statement coverage — including every branch of the alerting state machine, retry exhaustion, alerts that fail to send and are retried, TLS expiry warnings, SMTP failure, and heartbeat failure. The 9 uncovered statements are environment-variable parsing fallbacks, the duplicate-key warning, one corrupt-timestamp guard, and the `__main__` line.
 
-1. **Install Coverage Tool (Optional):**
+```bash
+pip install coverage
+coverage run --source=safeye -m unittest test_safeye.py && coverage report -m
+```
 
-   ```bash
-   pip install coverage
-   ```
+## Scope
 
-2. **Run Tests Without Coverage:**
+Deliberately **not** planned: a web dashboard, a database, a plugin system, a REST API. Each of those turns Safeye into a worse version of Uptime Kuma. The single-file, single-spreadsheet constraint is the point.
 
-   ```bash
-   python -m unittest test_safeye.py
-   ```
-
-3. **Run Tests With Coverage:**
-
-   ```bash
-   coverage run --source=safeye -m unittest test_safeye.py
-   coverage report -m
-   ```
-
-### Test Coverage Report
-
-The coverage report will display the percentage of code covered by tests and highlight any lines not covered.
-
-## Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. **Fork the Repository**
-
-2. **Create a Feature Branch**
-
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-3. **Commit Your Changes**
-
-   ```bash
-   git commit -am 'Add some feature'
-   ```
-
-4. **Push to the Branch**
-
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-
-5. **Open a Pull Request**
-
-## Possible New Features
-
-- **Extended Notification Channels**
-
-  - **Slack/Teams Integration:** In addition to email, send notifications to Slack channels, Microsoft Teams, or even SMS.
-  - **Customizable Notification Templates:** Allow users to customize the subject and body of the notifications (both plain text and HTML).
-  - **Alert Escalation:** Implement an escalation system that, after repeated failures, notifies higher-level contacts or triggers additional actions.
-
-- **Advanced Health Checks**
-
-  - **Content Validation:** Beyond checking the HTTP status code, validate the response content (e.g., check for a specific JSON field or keyword).
-  - **Performance Metrics:** Record and log response times, and even alert if the response time exceeds a specified threshold.
-  - **Certificate and Security Checks:** Optionally verify SSL certificates and flag endpoints with expired or misconfigured certificates.
-
-- **Configuration Flexibility**
-
-  - **Multiple Configuration Formats:** In addition to CSV, support JSON or YAML configuration files for easier editing and more complex configurations.
-  - **Command-line Interface (CLI):** Add an argparse-based CLI so users can run a one-time check, continuously monitor, or specify alternative configuration files.
-  - **Hot Reloading:** Allow the script to detect changes in the configuration file and reload endpoints without restarting the entire service.
-
-- **Historical Data and Reporting**
-
-  - **Database Storage:** Store check results in a database (SQLite, PostgreSQL, etc.) for historical analysis.
-  - **Web Dashboard:** Create a simple web dashboard (using Flask or Django) that displays uptime statistics, historical trends, and recent alerts.
-  - **Export Options:** Allow users to export logs or historical data in CSV, JSON, or PDF formats.
-
-- **Retry and Error Handling**
-
-  - **Exponential Backoff:** Implement retry logic with exponential backoff for transient errors.
-  - **Alert Suppression:** Prevent notification spam by alerting only once during a sustained outage, and then only when the endpoint recovers or after a set interval.
-
-- **Concurrency and Performance**
-  - **Asynchronous Requests:** Switch to an asynchronous approach (e.g., using `aiohttp` with asyncio) to handle multiple endpoints concurrently, especially useful when monitoring a large number of endpoints.
-  - **Parallel Execution:** Use multithreading or multiprocessing to run checks in parallel, improving the overall execution time.
-
-## Improvements and Enhancements
-
-- **Logging Enhancements**
-
-  - **Structured Logging:** Use structured logging (JSON output) to make it easier to integrate with log aggregation tools.
-  - **Rotating Log Files:** Instead of manually cleaning old logs, use Python’s `logging.handlers.TimedRotatingFileHandler` or `RotatingFileHandler` for built-in log rotation.
-  - **Centralized Logging:** Consider sending logs to a centralized service (e.g., Logstash, Graylog, or even a cloud logging service) for easier monitoring and analysis.
-
-- **Code Quality and Testing**
-
-  - **Increase Test Coverage:** Expand unit tests and add integration tests to cover different failure modes (e.g., network errors, malformed JSON, slow responses).
-  - **Refactoring:** Modularize your code further, separating concerns (e.g., configuration handling, HTTP requests, logging, notifications) to simplify maintenance and testing.
-  - **Documentation:** Improve inline documentation and create a detailed README or wiki that explains how to configure, run, and extend the script.
-
-- **Security Improvements**
-
-  - **Secure Sensitive Data:** Consider using a secure vault or encrypted configuration for sensitive data (like SMTP credentials), especially if the script is used in a production environment.
-  - **SSL/TLS Options:** Provide options to control SSL/TLS verification for endpoints, which might be useful in test environments.
-
-- **User Customization**
-
-  - **Plugin System:** Create a plugin architecture so that users can add their own health-check functions or notification channels.
-  - **Web API:** Expose a simple REST API that allows users to add, update, or remove endpoints dynamically and query check results.
-
-- **Monitoring and Alerting Integration**
-  - **Integration with Monitoring Tools:** Provide out-of-the-box integration with popular monitoring and alerting tools (like Prometheus, Grafana, or PagerDuty) for real-time monitoring and alert escalation.
+Plausible additions that keep that constraint: response-body assertions, a Slack/webhook notifier alongside email, and per-endpoint check intervals. Contributions welcome — fork, branch, PR.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE).
 
 ---
 
-**Disclaimer:** Use this script responsibly. Ensure you have permission to perform HTTP requests to the endpoints you configure. The author is not responsible for any misuse of this tool.
+**Disclaimer:** Ensure you have permission to send requests to the endpoints you configure.

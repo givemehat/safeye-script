@@ -1,3 +1,0 @@
-client;project_name;endpoint;expected_http_status;notify_emails;body_json;headers_json;http_method
-test;test project;https://www.python.org/;200;test@example.com,test2@example.com;;;GET
-test2;test2 project2;https://docs.python.org/3/;201;test@example.com,test2@example.com;;;GET

@@ -207,3 +207,9 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,python
+# Safeye runtime files
+logs/
+resume.log
+state.json
+state.json.tmp
+requests.csv
